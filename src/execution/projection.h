@@ -18,6 +18,7 @@ public:
     void Open() override;
     bool Next(Tuple& tuple, RID& rid) override;
     void Close() override;
+    Status GetStatus() const override { return child_->GetStatus(); }
 
 private:
     std::unique_ptr<Executor> child_;

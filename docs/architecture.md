@@ -25,7 +25,7 @@ main.cpp (REPL)
     ├── txn_manager      → Transaction lifecycle
     │   ├── lock_manager → S2PL lock table
     │   └── deadlock_det → Wait-for graph DFS
-    └── recovery_manager → ARIES crash recovery
+    └── recovery_manager → WAL analysis, redo, and undo
         └── log_manager  → WAL file I/O
 ```
 
@@ -43,10 +43,18 @@ The **Volcano (iterator) model** was chosen for the core engine for its simplici
 ### 4. LRU vs Clock Replacement
 **LRU** was chosen for the buffer pool replacement policy. While Clock is more efficient for real systems, LRU is simpler to implement correctly and easier to explain during viva.
 
-### 5. Record-Level vs Page-Level Locking
-**Record-level locking** (by RID) provides finer granularity and higher concurrency, which is important for demonstrating concurrent transaction behavior.
+### 5. Table-Level Strict 2PL
+The SQL path uses one reserved RID per table as a table lock. Scans acquire shared locks and
+INSERT/DELETE acquire exclusive locks until commit. This is deliberately conservative: it makes
+serializability and phantom prevention straightforward to demonstrate, at the cost of lower
+same-table write concurrency.
 
-### 6. Columnar Extension Design
+### 6. Recovery Boundary
+The catalog is persisted, heap pages are the durable source of truth, and primary indexes are
+rebuilt at startup. WAL records describe logical primary-key INSERT/DELETE changes, so redo and
+undo do not depend on a record retaining the same physical RID.
+
+### 7. Columnar Extension Design
 The columnar store is **additive** — it doesn't replace the core row-store but provides an alternative scan path. This design:
 - Preserves all core functionality
 - Enables direct A/B comparison for benchmarking

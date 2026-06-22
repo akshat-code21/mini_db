@@ -4,6 +4,7 @@
 #include "storage/page_manager.h"
 #include "storage/buffer_pool.h"
 #include "catalog/catalog.h"
+#include "index/index_manager.h"
 #include <filesystem>
 
 using namespace minidb;
@@ -66,7 +67,7 @@ TEST_F(RecoveryTest, NeedsRecoveryCommitted) {
     recovery_mgr->LogCommit(1);
     log_mgr->Flush();
 
-    EXPECT_FALSE(recovery_mgr->NeedsRecovery());
+    EXPECT_TRUE(recovery_mgr->NeedsRecovery());
 }
 
 TEST_F(RecoveryTest, NeedsRecoveryUncommitted) {
@@ -86,4 +87,34 @@ TEST_F(RecoveryTest, ClearWAL) {
     log_mgr->Clear();
     auto logs = log_mgr->ReadAllLogs();
     EXPECT_EQ(logs.size(), 0);
+}
+
+TEST_F(RecoveryTest, RedoesCommittedInsert) {
+    Schema schema({Column("id", ColumnType::INT, 0, true), Column("age", ColumnType::INT)});
+    ASSERT_TRUE(catalog->CreateTable("users", schema).ok());
+    IndexManager indexes(bp.get());
+    ASSERT_TRUE(indexes.CreateIndex("users", "").ok());
+    RecoveryManager manager(log_mgr.get(), bp.get(), catalog.get(), &indexes);
+    std::string data = schema.SerializeTuple({int32_t(7), int32_t(30)});
+    manager.LogBegin(7);
+    manager.LogInsert(7, "users", RID(), data, 7);
+    manager.LogCommit(7);
+    manager.Recover();
+    EXPECT_EQ(catalog->GetHeapFile("users")->GetRecordCount(), 1u);
+    RID rid; EXPECT_TRUE(indexes.GetIndex("users", "")->Search(7, rid).ok());
+}
+
+TEST_F(RecoveryTest, UndoesUncommittedInsert) {
+    Schema schema({Column("id", ColumnType::INT, 0, true)});
+    ASSERT_TRUE(catalog->CreateTable("users", schema).ok());
+    IndexManager indexes(bp.get());
+    ASSERT_TRUE(indexes.CreateIndex("users", "").ok());
+    RecoveryManager manager(log_mgr.get(), bp.get(), catalog.get(), &indexes);
+    std::string data = schema.SerializeTuple({int32_t(9)});
+    RID rid; ASSERT_TRUE(catalog->GetHeapFile("users")->InsertRecord(data.data(), data.size(), rid).ok());
+    indexes.GetIndex("users", "")->Insert(9, rid);
+    manager.LogBegin(9);
+    manager.LogInsert(9, "users", RID(), data, 9);
+    manager.Recover();
+    EXPECT_EQ(catalog->GetHeapFile("users")->GetRecordCount(), 0u);
 }

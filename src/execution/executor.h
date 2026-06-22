@@ -2,6 +2,7 @@
 
 #include "common/types.h"
 #include "common/rid.h"
+#include "common/status.h"
 #include <vector>
 
 namespace minidb {
@@ -20,6 +21,8 @@ public:
 
     // Clean up resources
     virtual void Close() = 0;
+
+    virtual Status GetStatus() const { return Status::OK(); }
 };
 
 }  // namespace minidb

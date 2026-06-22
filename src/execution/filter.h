@@ -17,6 +17,7 @@ public:
     void Open() override;
     bool Next(Tuple& tuple, RID& rid) override;
     void Close() override;
+    Status GetStatus() const override { return child_->GetStatus(); }
 
     // Evaluate an expression against a tuple
     static Value EvalExpr(const ExprPtr& expr, const Tuple& tuple,

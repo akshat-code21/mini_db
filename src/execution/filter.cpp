@@ -30,7 +30,7 @@ Value FilterExecutor::EvalExpr(const ExprPtr& expr, const Tuple& tuple,
     }
 
     if (auto* col = dynamic_cast<ColumnRefExpr*>(expr.get())) {
-        int idx = schema.FindColumn(col->column_name);
+        int idx = schema.FindColumn(col->table_name, col->column_name);
         if (idx >= 0 && idx < static_cast<int>(tuple.size())) {
             return tuple[idx];
         }

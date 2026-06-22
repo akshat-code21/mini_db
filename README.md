@@ -13,6 +13,8 @@ A fully functional relational database system built from scratch in **C++17**, i
 | Name | Roll Number | Email |
 |------|-------------|-------|
 | `<Name>` | `<Roll Number>` | `<Email>` |
+| `<Name>` | `<Roll Number>` | `<Email>` |
+| `<Name>` | `<Roll Number>` | `<Email>` |
 
 ---
 
@@ -42,7 +44,7 @@ Build a working relational database engine from foundational components, integra
 ├──────────────┬──────────────┬───────────────────────────────┤
 │  Execution   │  Transaction │  Recovery                     │
 │  Engine      │  Manager     │  Manager                      │
-│  (Volcano)   │  (S2PL)      │  (ARIES WAL)                 │
+│  (Volcano)   │  (S2PL)      │  (WAL Redo/Undo)             │
 ├──────────────┼──────────────┼───────────────────────────────┤
 │  B+ Tree     │  Lock        │  Log                          │
 │  Index       │  Manager     │  Manager                      │
@@ -67,7 +69,7 @@ Build a working relational database engine from foundational components, integra
 | **Cost-Based Optimizer** | Selectivity estimation, join order selection (DP), access path selection (seq vs index scan) |
 | **Execution Engine** | Volcano-style iterator model with SeqScan, IndexScan, Filter, Projection, NLJoin, Insert, Delete |
 | **Transaction Manager** | Strict Two-Phase Locking (S2PL), deadlock detection via wait-for graph |
-| **Recovery Manager** | ARIES-inspired WAL with Analysis/Redo/Undo phases |
+| **Recovery Manager** | WAL with analysis, committed redo, and loser undo |
 | **Columnar Extension** | Column-oriented storage, columnar scan, row-to-column converter |
 
 ---
@@ -146,21 +148,21 @@ Close() → Release resources
 - OR: `sel(A) + sel(B) - sel(A) × sel(B)`
 
 ### Join Ordering
-- For 2 tables: try both orderings, pick cheapest (dynamic programming)
-- For 3+ tables: left-deep tree with smallest-first heuristic
+- For 2 tables: estimate both nested-loop orders and choose the cheaper outer table
+- For 3+ tables: retain SQL order in a left-deep plan so each `ON` predicate remains correct
 
 ---
 
 ## 7. Transactions & Concurrency
 
 ### Locking Strategy
-- **Strict Two-Phase Locking (S2PL)**: Locks acquired during GROWING phase, released only at COMMIT/ABORT
+- **Strict Two-Phase Locking (S2PL)**: locks are held until COMMIT/ABORT
 - Lock modes: SHARED (for reads) and EXCLUSIVE (for writes)
-- Lock granularity: record-level (RID-based)
+- Lock granularity: table-level, represented by a reserved RID
 
 ### Isolation Guarantees
-- **Serializable isolation**: S2PL ensures conflict-serializable schedules
-- No phantom reads due to record-level locking
+- **Serializable isolation**: table S/X locks make conflicting schedules serializable
+- Table locks also prevent phantoms; the deliberate trade-off is lower write concurrency
 
 ### Deadlock Handling
 - **Wait-for graph** constructed from lock table
@@ -181,10 +183,14 @@ Close() → Release resources
 - Before-image stored for DELETE (for undo)
 - After-image stored for INSERT (for redo)
 
-### Crash Recovery (ARIES-inspired)
-1. **Analysis**: Scan log forward, identify active (uncommitted) transactions
-2. **Redo**: Replay all logged changes (idempotent)
-3. **Undo**: Rollback uncommitted transactions in reverse log order
+### Crash Recovery
+1. **Analysis**: scan WAL and identify committed and active transactions
+2. **Redo**: idempotently replay committed logical changes using primary keys
+3. **Undo**: reverse active transaction changes
+4. Flush recovered pages and catalog, then clear the WAL checkpoint
+
+Catalog metadata is persisted separately. Primary indexes are rebuilt from heap data at startup,
+which keeps recovery simple and avoids logging B+ tree structural changes.
 
 ---
 
@@ -203,30 +209,31 @@ Row-store (heap file) stores all columns of a record together — efficient for 
 - Late materialization: filter on columns first, materialize full rows only for matches
 
 ### Results
-Columnar storage demonstrates significant speedup for:
-- **Column projection** (SELECT col): 10-100x faster (reads only needed column)
-- **Aggregation** (SUM, COUNT): 5-50x faster (contiguous memory access)
-- **Filtered scans**: 3-10x faster (column-at-a-time evaluation)
+The checked-in Release benchmark shows the expected trade-off: full-row scans are similar,
+while projection, aggregation, and filtering benefit from contiguous typed arrays. The extension
+can be demonstrated interactively with `\columnar <table>`.
 
 ---
 
 ## 10. Benchmarks
 
 ### Experimental Setup
-- Language: C++17 with -O2 optimization
+- Language/toolchain: C++17, MSVC 19.44 Release (`/O2`), Windows
 - Page size: 4KB, Buffer pool: 256-1024 frames
 - Dataset: Synthetic table with (id INT, name VARCHAR, age INT)
+- Timings exclude dataset generation and column conversion
 
 ### Key Results
 
-| Operation | Row-Store | Columnar | Speedup |
+| Operation (100K rows) | Row-store | Columnar | Speedup |
 |-----------|-----------|----------|---------|
-| Full Scan (100K rows) | baseline | ~1x | N/A |
-| Projection (100K rows) | baseline | 10-100x | ✅ |
-| SUM aggregation (100K rows) | baseline | 5-50x | ✅ |
-| Filter (100K rows) | baseline | 3-10x | ✅ |
+| Full scan | 12.703 ms | 10.131 ms | 1.25x |
+| Projection | 12.871 ms | 0.043 ms | 300.73x |
+| SUM aggregation | 12.750 ms | 0.249 ms | 51.19x |
+| Filter | 14.336 ms | 1.168 ms | 12.27x |
 
-Run benchmarks: `./build/benchmarks/minidb_bench`
+Raw results are in `benchmarks/results.csv`; methodology and analysis are in
+`docs/benchmark_report.md`.
 
 ---
 
@@ -237,16 +244,15 @@ Run benchmarks: `./build/benchmarks/minidb_bench`
 - No GROUP BY / ORDER BY / HAVING
 - No multi-column indexes
 - B+ Tree delete doesn't merge/redistribute underflowing nodes
-- No persistent catalog (recreate tables on restart)
 
 ### Scalability Limits
-- Single-threaded query execution
-- In-memory catalog (not persisted across restarts)
+- Single-threaded REPL; lock/recovery components are thread-safe and concurrency-tested
+- Table locking favors clarity and serializability over record-level write concurrency
 - Nested loop join only (no hash/sort-merge join)
 
 ### Future Improvements
 - Hash join and sort-merge join operators
-- Persistent system catalog
+- Catalog transactions for DDL changes
 - Multi-column and composite indexes
 - UPDATE statement support
 - Query plan caching
@@ -266,23 +272,20 @@ Run benchmarks: `./build/benchmarks/minidb_bench`
 # Clone and navigate to project directory
 cd project
 
-# Create build directory
-mkdir -p build && cd build
+# Configure and build (works with MSVC, GCC, or Clang)
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build --config Release -j
 
-# Configure
-cmake .. -DCMAKE_BUILD_TYPE=Release
+# Test
+ctest --test-dir build -C Release --output-on-failure
 
-# Build
-make -j$(nproc)
+# Windows executables
+.\build\src\Release\minidb.exe
+.\build\benchmarks\Release\minidb_bench.exe
 
-# Run the database
-./src/minidb
-
-# Run tests
-ctest --output-on-failure
-
-# Run benchmarks
-./benchmarks/minidb_bench
+# GCC/Clang single-config executables
+./build/src/minidb
+./build/benchmarks/minidb_bench
 ```
 
 ### Example Commands

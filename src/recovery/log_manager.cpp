@@ -1,6 +1,7 @@
 #include "recovery/log_manager.h"
 #include <filesystem>
 #include <cstring>
+#include <algorithm>
 
 namespace minidb {
 
@@ -10,6 +11,9 @@ LogManager::LogManager(const std::string& log_file_path) : log_file_path_(log_fi
         std::filesystem::create_directories(parent);
     }
     log_file_.open(log_file_path, std::ios::app | std::ios::binary);
+    lsn_t max_lsn = 0;
+    for (const auto& record : ReadAllLogs()) max_lsn = std::max(max_lsn, record.lsn);
+    next_lsn_ = max_lsn + 1;
 }
 
 LogManager::~LogManager() {

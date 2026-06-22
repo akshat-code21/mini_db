@@ -14,6 +14,7 @@ struct Column {
     uint16_t max_length;  // For VARCHAR
     bool is_primary_key;
     bool is_nullable;
+    std::string table_name;  // Set on plan schemas to preserve JOIN ownership.
 
     Column() : type(ColumnType::INT), max_length(0), is_primary_key(false), is_nullable(true) {}
     Column(const std::string& n, ColumnType t, uint16_t len = 0, bool pk = false, bool nullable = true)
@@ -43,6 +44,16 @@ public:
     int FindColumn(const std::string& name) const {
         for (size_t i = 0; i < columns_.size(); i++) {
             if (columns_[i].name == name) return static_cast<int>(i);
+        }
+        return -1;
+    }
+
+    int FindColumn(const std::string& table, const std::string& name) const {
+        for (size_t i = 0; i < columns_.size(); i++) {
+            if (columns_[i].name == name &&
+                (table.empty() || columns_[i].table_name == table)) {
+                return static_cast<int>(i);
+            }
         }
         return -1;
     }

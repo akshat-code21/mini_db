@@ -6,6 +6,7 @@
 #include "catalog/schema.h"
 #include "optimizer/stats.h"
 #include "common/status.h"
+#include "execution/execution_context.h"
 #include <vector>
 
 namespace minidb {
@@ -15,7 +16,8 @@ class InsertExecutor : public Executor {
 public:
     InsertExecutor(HeapFile* heap_file, BPlusTree* index, const Schema& schema,
                    StatsManager* stats_mgr, const std::string& table_name,
-                   const std::vector<Tuple>& tuples);
+                   const std::vector<Tuple>& tuples,
+                   ExecutionContext context = {}, RID table_lock = {});
 
     void Open() override;
     bool Next(Tuple& tuple, RID& rid) override;
@@ -32,6 +34,11 @@ private:
     std::vector<Tuple> tuples_;
     int inserted_count_;
     bool done_;
+    ExecutionContext context_;
+    RID table_lock_;
+    Status status_;
+public:
+    Status GetStatus() const override { return status_; }
 };
 
 }  // namespace minidb

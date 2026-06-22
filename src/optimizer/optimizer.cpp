@@ -68,7 +68,11 @@ PlanNodePtr Optimizer::OptimizeInsert(InsertStmt& stmt) {
         for (size_t i = 0; i < value_exprs.size(); i++) {
             auto* lit = dynamic_cast<LiteralExpr*>(value_exprs[i].get());
             if (lit) {
-                tuple.push_back(lit->value);
+                if (info->schema.GetColumn(i).type == ColumnType::FLOAT &&
+                    std::holds_alternative<int32_t>(lit->value))
+                    tuple.push_back(static_cast<double>(std::get<int32_t>(lit->value)));
+                else
+                    tuple.push_back(lit->value);
             }
         }
         plan->tuples_to_insert.push_back(std::move(tuple));
@@ -126,7 +130,7 @@ PlanNodePtr Optimizer::BuildJoinPlan(const std::vector<std::string>& tables,
 
     // Simple join ordering: use dynamic programming for small number of tables
     // For 2 tables: try both orderings, pick cheaper
-    // For 3+ tables: left-deep tree with heuristic ordering (smallest first)
+    // For 3+ tables preserve SQL order so ON predicates remain attached correctly.
 
     // Build scans for each table
     std::vector<PlanNodePtr> scans;

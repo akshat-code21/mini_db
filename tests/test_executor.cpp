@@ -145,3 +145,42 @@ TEST_F(ExecutorTest, DeleteRows) {
 
     EXPECT_EQ(count, 1);
 }
+
+TEST_F(ExecutorTest, DuplicatePrimaryKeyDoesNotLeakIntoHeap) {
+    ExecuteSQL("INSERT INTO users VALUES (1, 'Alice', 30)");
+    Lexer lexer("INSERT INTO users VALUES (1, 'Duplicate', 40)");
+    Parser parser(lexer.Tokenize());
+    Status status;
+    auto ast = parser.Parse(status);
+    ASSERT_TRUE(binder->Bind(ast).ok());
+    auto executor = exec_factory->Build(optimizer->Optimize(ast));
+    executor->Open();
+    EXPECT_EQ(executor->GetStatus().code(), StatusCode::DUPLICATE_KEY);
+    EXPECT_EQ(catalog->GetHeapFile("users")->GetRecordCount(), 1u);
+}
+
+TEST_F(ExecutorTest, QualifiedJoinWithDuplicateColumnNames) {
+    Schema orders({Column("id", ColumnType::INT, 0, true),
+                   Column("user_id", ColumnType::INT), Column("amount", ColumnType::INT)});
+    ASSERT_TRUE(catalog->CreateTable("orders", orders).ok());
+    ASSERT_TRUE(index_mgr->CreateIndex("orders", "").ok());
+    stats_mgr->SetStats("orders", TableStats());
+    ExecuteSQL("INSERT INTO users VALUES (1, 'Alice', 30)");
+    ExecuteSQL("INSERT INTO users VALUES (2, 'Bob', 25)");
+    ExecuteSQL("INSERT INTO orders VALUES (10, 1, 100)");
+    ExecuteSQL("INSERT INTO orders VALUES (20, 2, 200)");
+
+    Lexer lexer("SELECT users.name, orders.amount FROM users JOIN orders ON users.id = orders.user_id");
+    Parser parser(lexer.Tokenize());
+    Status status;
+    auto ast = parser.Parse(status);
+    ASSERT_TRUE(binder->Bind(ast).ok());
+    auto executor = exec_factory->Build(optimizer->Optimize(ast));
+    executor->Open();
+    std::vector<Tuple> rows;
+    Tuple tuple; RID rid;
+    while (executor->Next(tuple, rid)) rows.push_back(tuple);
+    ASSERT_EQ(rows.size(), 2u);
+    EXPECT_EQ(std::get<std::string>(rows[0][0]), "Alice");
+    EXPECT_EQ(std::get<int32_t>(rows[0][1]), 100);
+}

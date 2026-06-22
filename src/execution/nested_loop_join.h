@@ -19,6 +19,10 @@ public:
     void Open() override;
     bool Next(Tuple& tuple, RID& rid) override;
     void Close() override;
+    Status GetStatus() const override {
+        if (!outer_->GetStatus().ok()) return outer_->GetStatus();
+        return inner_->GetStatus();
+    }
 
 private:
     bool EvalJoinCondition(const Tuple& outer_tuple, const Tuple& inner_tuple);

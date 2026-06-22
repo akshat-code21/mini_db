@@ -5,6 +5,7 @@
 #include "catalog/catalog.h"
 #include "index/index_manager.h"
 #include "optimizer/stats.h"
+#include "execution/execution_context.h"
 #include <memory>
 
 namespace minidb {
@@ -12,7 +13,10 @@ namespace minidb {
 // Factory that builds an executor tree from a physical plan.
 class ExecutorFactory {
 public:
-    ExecutorFactory(Catalog* catalog, IndexManager* index_mgr, StatsManager* stats_mgr);
+    ExecutorFactory(Catalog* catalog, IndexManager* index_mgr, StatsManager* stats_mgr,
+                    ExecutionContext context = {});
+
+    void SetContext(ExecutionContext context) { context_ = context; }
 
     std::unique_ptr<Executor> Build(PlanNodePtr plan);
 
@@ -31,6 +35,7 @@ private:
     Catalog* catalog_;
     IndexManager* index_mgr_;
     StatsManager* stats_mgr_;
+    ExecutionContext context_;
 };
 
 }  // namespace minidb

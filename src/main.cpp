@@ -17,6 +17,7 @@
 #include "sql/binder.h"
 #include "optimizer/optimizer.h"
 #include "optimizer/stats.h"
+#include "app/system_commands.h"
 #include "execution/executor_factory.h"
 #include "txn/lock_manager.h"
 #include "txn/txn_manager.h"
@@ -102,8 +103,22 @@ int main(int argc, char* argv[]) {
     BufferPool buffer_pool(&page_manager);
 
     // Initialize catalog and indexes
-    Catalog catalog(&buffer_pool);
+    Catalog catalog(&buffer_pool, CATALOG_FILE);
     IndexManager index_mgr(&buffer_pool);
+    for (const auto& name : catalog.GetTableNames()) {
+        TableInfo* info = catalog.GetTable(name);
+        if (info && info->index_root_page_id != INVALID_PAGE_ID) {
+            index_mgr.CreateIndex(name, "");
+            auto* index = index_mgr.GetIndex(name, "");
+            auto* heap = catalog.GetHeapFile(name);
+            if (index && heap) heap->Scan([&](const RID& rid, const char* data, uint16_t length) {
+                auto tuple = info->schema.DeserializeTuple(data, length);
+                index->Insert(info->schema.GetPrimaryKey(tuple), rid);
+                return true;
+            });
+            if (index) catalog.SetIndexRoot(name, index->GetRootPageId());
+        }
+    }
     StatsManager stats_mgr;
 
     // Initialize transaction subsystem
@@ -113,7 +128,7 @@ int main(int argc, char* argv[]) {
 
     // Initialize recovery
     LogManager log_mgr(WAL_FILE);
-    RecoveryManager recovery_mgr(&log_mgr, &buffer_pool, &catalog);
+    RecoveryManager recovery_mgr(&log_mgr, &buffer_pool, &catalog, &index_mgr);
 
     // Check for crash recovery
     if (recovery_mgr.NeedsRecovery()) {
@@ -124,6 +139,20 @@ int main(int argc, char* argv[]) {
     // Initialize optimizer and executor factory
     Optimizer optimizer(&catalog, &index_mgr, &stats_mgr);
     ExecutorFactory exec_factory(&catalog, &index_mgr, &stats_mgr);
+
+    for (const auto& name : catalog.GetTableNames()) {
+        TableStats stats;
+        if (auto* heap = catalog.GetHeapFile(name)) {
+            stats.page_count = heap->GetPageCount();
+            TableInfo* info = catalog.GetTable(name);
+            heap->Scan([&](const RID&, const char* data, uint16_t length) {
+                auto tuple = info->schema.DeserializeTuple(data, length);
+                stats.UpdateOnInsert(info->schema.GetPrimaryKey(tuple));
+                return true;
+            });
+        }
+        stats_mgr.SetStats(name, stats);
+    }
 
     // Binder
     Binder binder(&catalog);
@@ -150,52 +179,7 @@ int main(int argc, char* argv[]) {
             break;
         }
 
-        if (line == "help") {
-            std::cout << "Supported SQL commands:\n";
-            std::cout << "  CREATE TABLE name (col1 type, col2 type, ...)\n";
-            std::cout << "  INSERT INTO name VALUES (v1, v2, ...)\n";
-            std::cout << "  SELECT * FROM name [WHERE cond]\n";
-            std::cout << "  SELECT cols FROM t1 JOIN t2 ON cond [WHERE cond]\n";
-            std::cout << "  DELETE FROM name [WHERE cond]\n";
-            std::cout << "\nTypes: INT, FLOAT, VARCHAR(n), BOOL\n";
-            std::cout << "Operators: =, !=, <, >, <=, >=, AND, OR\n";
-            std::cout << "\nSystem commands:\n";
-            std::cout << "  \\tables    - List all tables\n";
-            std::cout << "  \\schema T  - Show schema for table T\n";
-            std::cout << "  exit       - Quit\n\n";
-            continue;
-        }
-
-        if (line == "\\tables") {
-            auto names = catalog.GetTableNames();
-            std::cout << "Tables (" << names.size() << "):\n";
-            for (const auto& name : names) {
-                TableInfo* info = catalog.GetTable(name);
-                std::cout << "  " << name;
-                if (info) std::cout << " (" << info->row_count << " rows)";
-                std::cout << "\n";
-            }
-            continue;
-        }
-
-        if (line.substr(0, 8) == "\\schema ") {
-            std::string table_name = line.substr(8);
-            TableInfo* info = catalog.GetTable(table_name);
-            if (!info) {
-                std::cout << "Error: Table '" << table_name << "' not found\n";
-                continue;
-            }
-            std::cout << "Table: " << table_name << "\n";
-            std::cout << "Columns:\n";
-            for (size_t i = 0; i < info->schema.GetColumnCount(); i++) {
-                const auto& col = info->schema.GetColumn(i);
-                std::cout << "  " << col.name << " " << column_type_to_string(col.type);
-                if (col.type == ColumnType::VARCHAR) std::cout << "(" << col.max_length << ")";
-                if (col.is_primary_key) std::cout << " PRIMARY KEY";
-                std::cout << "\n";
-            }
-            continue;
-        }
+        if (SystemCommands::TryExecute(line, catalog, binder, optimizer)) continue;
 
         // Parse SQL
         auto start_time = std::chrono::high_resolution_clock::now();
@@ -215,6 +199,12 @@ int main(int argc, char* argv[]) {
         // Handle CREATE TABLE specially (before binding)
         if (ast->type == ASTNodeType::CREATE_TABLE) {
             auto& stmt = std::get<CreateTableStmt>(ast->stmt);
+
+            status = binder.Bind(ast);
+            if (!status.ok()) {
+                std::cout << "Bind Error: " << status.message() << "\n";
+                continue;
+            }
 
             // Check for duplicates
             if (catalog.TableExists(stmt.table_name)) {
@@ -240,11 +230,14 @@ int main(int argc, char* argv[]) {
             int pk_idx = schema.GetPrimaryKeyIndex();
             if (pk_idx >= 0) {
                 index_mgr.CreateIndex(stmt.table_name, "");
+                if (auto* index = index_mgr.GetIndex(stmt.table_name, ""))
+                    catalog.SetIndexRoot(stmt.table_name, index->GetRootPageId());
             }
 
             // Initialize stats
             TableStats ts;
             stats_mgr.SetStats(stmt.table_name, ts);
+            buffer_pool.FlushAllPages();
 
             auto elapsed = std::chrono::high_resolution_clock::now() - start_time;
             auto ms = std::chrono::duration_cast<std::chrono::microseconds>(elapsed).count();
@@ -259,9 +252,16 @@ int main(int argc, char* argv[]) {
             continue;
         }
 
+        // Every SQL statement is an auto-commit strict-2PL transaction.
+        Transaction* txn = txn_mgr.Begin();
+        recovery_mgr.LogBegin(txn->GetTxnId());
+        exec_factory.SetContext({txn, &lock_mgr, &recovery_mgr});
+
         // Optimize
         auto plan = optimizer.Optimize(ast);
         if (!plan) {
+            recovery_mgr.LogAbort(txn->GetTxnId());
+            txn_mgr.Abort(txn);
             std::cout << "Error: Failed to create execution plan\n";
             continue;
         }
@@ -269,12 +269,25 @@ int main(int argc, char* argv[]) {
         // Build executor
         auto executor = exec_factory.Build(plan);
         if (!executor) {
+            recovery_mgr.LogAbort(txn->GetTxnId());
+            txn_mgr.Abort(txn);
             std::cout << "Error: Failed to build executor\n";
             continue;
         }
 
         // Execute
         executor->Open();
+
+        if (!executor->GetStatus().ok()) {
+            std::string table_name;
+            if (ast->type == ASTNodeType::INSERT) table_name = std::get<InsertStmt>(ast->stmt).table_name;
+            if (ast->type == ASTNodeType::DELETE_STMT) table_name = std::get<DeleteStmt>(ast->stmt).table_name;
+            txn_mgr.Abort(txn, catalog.GetHeapFile(table_name), index_mgr.GetIndex(table_name, ""));
+            recovery_mgr.LogAbort(txn->GetTxnId());
+            std::cout << "Execution Error: " << executor->GetStatus().message() << "\n";
+            executor->Close();
+            continue;
+        }
 
         if (ast->type == ASTNodeType::SELECT) {
             auto& stmt = std::get<SelectStmt>(ast->stmt);
@@ -356,11 +369,20 @@ int main(int argc, char* argv[]) {
         }
 
         executor->Close();
+        recovery_mgr.LogCommit(txn->GetTxnId());
+        txn_mgr.Commit(txn);
+
+        // Persist roots because a B+ tree split may replace its root.
+        for (const auto& name : catalog.GetTableNames()) {
+            if (auto* index = index_mgr.GetIndex(name, ""))
+                catalog.SetIndexRoot(name, index->GetRootPageId());
+        }
     }
 
     // Flush everything before exit
     buffer_pool.FlushAllPages();
     log_mgr.Flush();
+    log_mgr.Clear();  // Clean-shutdown checkpoint: pages are durable before WAL removal.
 
     return 0;
 }

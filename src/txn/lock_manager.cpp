@@ -92,7 +92,10 @@ void LockManager::UnlockAll(Transaction* txn) {
     for (auto& [rid, queue] : lock_table_) {
         auto it = queue.queue.begin();
         while (it != queue.queue.end()) {
-            if (it->txn_id == txn->GetTxnId()) {
+            // A blocked thread owns its waiting request and removes it after
+            // observing ABORTED. External abort only removes granted locks.
+            if (it->txn_id == txn->GetTxnId() &&
+                (it->granted || txn->GetState() != TxnState::ABORTED)) {
                 it = queue.queue.erase(it);
                 queue.cv.notify_all();
             } else {

@@ -412,15 +412,19 @@ void BPlusTree::InsertIntoParent(page_id_t left_page_id, int32_t key, page_id_t 
             new_internal.Header()->num_keys++;
         }
 
+        // Keep child IDs before unpinning; the frame may be evicted afterwards.
+        std::vector<page_id_t> moved_children(all_children.begin() + split + 1,
+                                               all_children.end());
+
         buffer_pool_->UnpinPage(parent_page_id, true);
         buffer_pool_->UnpinPage(new_internal_id, true);
 
         // Update children's parent pointers for the new internal node
-        for (int i = 0; i <= new_internal.Header()->num_keys; i++) {
-            Page* cp = buffer_pool_->FetchPage(new_internal.ChildAt(i));
+        for (page_id_t child_id : moved_children) {
+            Page* cp = buffer_pool_->FetchPage(child_id);
             if (cp) {
                 reinterpret_cast<BNodeHeader*>(cp->GetData())->parent_page_id = new_internal_id;
-                buffer_pool_->UnpinPage(new_internal.ChildAt(i), true);
+                buffer_pool_->UnpinPage(child_id, true);
             }
         }
 

@@ -27,6 +27,7 @@ public:
     // Drop an index
     Status DropIndex(const std::string& table_name, const std::string& column_name);
 
+
 private:
     std::string MakeKey(const std::string& table, const std::string& col) const {
         return table + "." + col;

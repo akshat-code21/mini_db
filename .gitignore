@@ -33,6 +33,7 @@
 
 # CMake build files
 /build/
+/build-*/
 /CMakeCache.txt
 /CMakeFiles/
 /CMakeSupport/
@@ -45,6 +46,9 @@
 # IDEs and editors
 .idea/
 .vscode/
+.vs/
+*.suo
+*.user
 *.swp
 *.swo
 *~
@@ -54,3 +58,5 @@
 
 # Project specific
 /minidb_data/
+/test_data/
+/bench_data/

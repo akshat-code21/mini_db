@@ -65,4 +65,11 @@ Transaction* TxnManager::GetTransaction(txn_id_t txn_id) {
     return it->second.get();
 }
 
+void TxnManager::AbortDeadlock(txn_id_t txn_id) {
+    Transaction* txn = GetTransaction(txn_id);
+    if (!txn) return;
+    txn->SetState(TxnState::ABORTED);
+    lock_mgr_->UnlockAll(txn);
+}
+
 }  // namespace minidb

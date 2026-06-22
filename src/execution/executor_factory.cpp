@@ -9,8 +9,9 @@
 
 namespace minidb {
 
-ExecutorFactory::ExecutorFactory(Catalog* catalog, IndexManager* index_mgr, StatsManager* stats_mgr)
-    : catalog_(catalog), index_mgr_(index_mgr), stats_mgr_(stats_mgr) {}
+ExecutorFactory::ExecutorFactory(Catalog* catalog, IndexManager* index_mgr, StatsManager* stats_mgr,
+                                 ExecutionContext context)
+    : catalog_(catalog), index_mgr_(index_mgr), stats_mgr_(stats_mgr), context_(context) {}
 
 std::unique_ptr<Executor> ExecutorFactory::Build(PlanNodePtr plan) {
     if (!plan) return nullptr;
@@ -40,7 +41,8 @@ std::unique_ptr<Executor> ExecutorFactory::BuildSeqScan(PlanNodePtr plan) {
     TableInfo* info = catalog_->GetTable(plan->table_name);
     if (!heap || !info) return nullptr;
 
-    return std::make_unique<SeqScanExecutor>(heap, info->schema);
+    return std::make_unique<SeqScanExecutor>(heap, info->schema, context_,
+                                             RID(info->heap_file_page_id, UINT16_MAX));
 }
 
 std::unique_ptr<Executor> ExecutorFactory::BuildIndexScan(PlanNodePtr plan) {
@@ -49,7 +51,8 @@ std::unique_ptr<Executor> ExecutorFactory::BuildIndexScan(PlanNodePtr plan) {
     BPlusTree* index = index_mgr_->GetIndex(plan->table_name, "");
     if (!heap || !info || !index) return nullptr;
 
-    return std::make_unique<IndexScanExecutor>(index, heap, info->schema, plan->index_key);
+    return std::make_unique<IndexScanExecutor>(index, heap, info->schema, plan->index_key,
+                                               context_, RID(info->heap_file_page_id, UINT16_MAX));
 }
 
 std::unique_ptr<Executor> ExecutorFactory::BuildFilter(PlanNodePtr plan) {
@@ -98,7 +101,8 @@ std::unique_ptr<Executor> ExecutorFactory::BuildInsert(PlanNodePtr plan) {
     BPlusTree* index = index_mgr_->GetIndex(plan->table_name, "");
 
     return std::make_unique<InsertExecutor>(
-        heap, index, info->schema, stats_mgr_, plan->table_name, plan->tuples_to_insert);
+        heap, index, info->schema, stats_mgr_, plan->table_name, plan->tuples_to_insert,
+        context_, RID(info->heap_file_page_id, UINT16_MAX));
 }
 
 std::unique_ptr<Executor> ExecutorFactory::BuildDelete(PlanNodePtr plan) {
@@ -112,7 +116,8 @@ std::unique_ptr<Executor> ExecutorFactory::BuildDelete(PlanNodePtr plan) {
     if (!heap || !info) return nullptr;
 
     return std::make_unique<DeleteExecutor>(
-        std::move(child), heap, index, info->schema, stats_mgr_, plan->table_name);
+        std::move(child), heap, index, info->schema, stats_mgr_, plan->table_name,
+        context_, RID(info->heap_file_page_id, UINT16_MAX));
 }
 
 Schema ExecutorFactory::GetPlanSchema(PlanNodePtr plan) {
@@ -120,7 +125,11 @@ Schema ExecutorFactory::GetPlanSchema(PlanNodePtr plan) {
         case PlanNodeType::SEQ_SCAN:
         case PlanNodeType::INDEX_SCAN: {
             TableInfo* info = catalog_->GetTable(plan->table_name);
-            if (info) return info->schema;
+            if (info) {
+                auto columns = info->schema.GetColumns();
+                for (auto& column : columns) column.table_name = plan->table_name;
+                return Schema(columns);
+            }
             return Schema();
         }
         case PlanNodeType::FILTER:

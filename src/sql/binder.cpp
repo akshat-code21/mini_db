@@ -32,6 +32,9 @@ Status Binder::BindCreateTable(CreateTableStmt& stmt) {
 
     // Check for duplicate column names
     for (size_t i = 0; i < stmt.columns.size(); i++) {
+        if (stmt.columns[i].is_primary_key && stmt.columns[i].type != ColumnType::INT) {
+            return Status::TypeError("Primary key must be INT (the B+ tree uses integer keys)");
+        }
         for (size_t j = i + 1; j < stmt.columns.size(); j++) {
             if (stmt.columns[i].name == stmt.columns[j].name) {
                 return Status::BindError("Duplicate column name: " + stmt.columns[i].name);
@@ -57,6 +60,21 @@ Status Binder::BindInsert(InsertStmt& stmt) {
             return Status::BindError("Value count (" + std::to_string(values.size()) +
                                      ") doesn't match column count (" +
                                      std::to_string(info->schema.GetColumnCount()) + ")");
+        }
+        for (size_t i = 0; i < values.size(); ++i) {
+            auto* literal = dynamic_cast<LiteralExpr*>(values[i].get());
+            if (!literal) return Status::TypeError("INSERT values must be literals");
+            const auto type = info->schema.GetColumn(i).type;
+            bool matches = (type == ColumnType::INT && std::holds_alternative<int32_t>(literal->value)) ||
+                           (type == ColumnType::FLOAT && (std::holds_alternative<double>(literal->value) ||
+                                                         std::holds_alternative<int32_t>(literal->value))) ||
+                           (type == ColumnType::VARCHAR && std::holds_alternative<std::string>(literal->value)) ||
+                           (type == ColumnType::BOOL && std::holds_alternative<bool>(literal->value));
+            if (!matches) return Status::TypeError("Type mismatch for column '" +
+                                                    info->schema.GetColumn(i).name + "'");
+            if (type == ColumnType::VARCHAR &&
+                std::get<std::string>(literal->value).size() > info->schema.GetColumn(i).max_length)
+                return Status::TypeError("VARCHAR too long for column '" + info->schema.GetColumn(i).name + "'");
         }
     }
 
@@ -142,18 +160,18 @@ Status Binder::BindExpression(ExprPtr& expr, const std::vector<std::string>& tab
             }
         } else {
             // Unqualified column — search all tables
-            bool found = false;
+            int matches = 0;
             for (const auto& t : table_names) {
                 TableInfo* info = catalog_->GetTable(t);
                 if (info && info->schema.FindColumn(col_ref->column_name) >= 0) {
                     col_ref->table_name = t;  // Resolve the table
-                    found = true;
-                    break;
+                    matches++;
                 }
             }
-            if (!found) {
+            if (matches == 0) {
                 return Status::BindError("Column '" + col_ref->column_name + "' not found");
             }
+            if (matches > 1) return Status::BindError("Ambiguous column: " + col_ref->column_name);
         }
     } else if (auto* bin = dynamic_cast<BinaryOpExpr*>(expr.get())) {
         Status s = BindExpression(bin->left, table_names);

@@ -8,6 +8,8 @@
 #include "catalog/catalog.h"
 #include <thread>
 #include <filesystem>
+#include <atomic>
+#include <chrono>
 
 using namespace minidb;
 
@@ -105,4 +107,24 @@ TEST_F(TxnTest, S2PLViolation) {
     Status s = lock_mgr->LockShared(txn, rid);
     // Should fail because we're in SHRINKING phase
     EXPECT_FALSE(s.ok());
+}
+
+TEST_F(TxnTest, DetectsAndResolvesRealDeadlock) {
+    Transaction* txn1 = txn_mgr->Begin();
+    Transaction* txn2 = txn_mgr->Begin();
+    RID a(1, 0), b(2, 0);
+    ASSERT_TRUE(lock_mgr->LockExclusive(txn1, a).ok());
+    ASSERT_TRUE(lock_mgr->LockExclusive(txn2, b).ok());
+
+    std::thread waiter1([&] { lock_mgr->LockExclusive(txn1, b); });
+    std::thread waiter2([&] { lock_mgr->LockExclusive(txn2, a); });
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    DeadlockDetector detector(lock_mgr.get());
+    txn_id_t victim = detector.Detect();
+    EXPECT_NE(victim, INVALID_TXN_ID);
+    txn_mgr->AbortDeadlock(victim);
+    waiter1.join();
+    waiter2.join();
+    Transaction* survivor = victim == txn1->GetTxnId() ? txn2 : txn1;
+    txn_mgr->Commit(survivor);
 }

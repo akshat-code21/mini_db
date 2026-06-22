@@ -45,6 +45,7 @@ private:
 
     BufferPool* buffer_pool_;
     page_id_t first_page_id_;
+    page_id_t insert_page_id_;  // Cached append target; avoids O(n²) page searches.
 };
 
 }  // namespace minidb

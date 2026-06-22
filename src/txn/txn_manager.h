@@ -29,6 +29,7 @@ public:
 
     // Get a transaction by ID
     Transaction* GetTransaction(txn_id_t txn_id);
+    void AbortDeadlock(txn_id_t txn_id);
 
 private:
     LockManager* lock_mgr_;

@@ -65,7 +65,6 @@ BenchResult BenchPageInsert(int num_records) {
     bp.FlushAllPages();
     auto elapsed = std::chrono::duration<double, std::milli>(Clock::now() - start).count();
 
-    std::filesystem::remove_all("bench_data");
     return {"Heap File Insert", elapsed, num_records / (elapsed / 1000.0), static_cast<size_t>(num_records)};
 }
 
@@ -98,7 +97,6 @@ BenchResult BenchHeapScan(int num_records) {
     });
     auto elapsed = std::chrono::duration<double, std::milli>(Clock::now() - start).count();
 
-    std::filesystem::remove_all("bench_data");
     return {"Heap File Sequential Scan", elapsed, count / (elapsed / 1000.0), static_cast<size_t>(count)};
 }
 
@@ -119,7 +117,6 @@ BenchResult BenchBTreeInsert(int num_keys) {
     }
     auto elapsed = std::chrono::duration<double, std::milli>(Clock::now() - start).count();
 
-    std::filesystem::remove_all("bench_data");
     return {"B+ Tree Insert", elapsed, num_keys / (elapsed / 1000.0), static_cast<size_t>(num_keys)};
 }
 
@@ -142,7 +139,6 @@ BenchResult BenchBTreeSearch(int num_keys) {
     }
     auto elapsed = std::chrono::duration<double, std::milli>(Clock::now() - start).count();
 
-    std::filesystem::remove_all("bench_data");
     return {"B+ Tree Point Lookup", elapsed, found / (elapsed / 1000.0), static_cast<size_t>(found)};
 }
 
@@ -205,6 +201,9 @@ BenchResult BenchRowStoreProjection(HeapFile& heap, const Schema& schema, int nu
 BenchResult BenchColumnarProjection(ColumnarStore& col_store, int num_rows) {
     auto start = Clock::now();
     const auto& col = col_store.ScanColumn(2); // age column
+    volatile int64_t checksum = 0; // consume values so the compiler cannot remove the scan
+    for (int32_t value : col.int_data) checksum += value;
+    (void)checksum;
     int count = static_cast<int>(col.int_data.size());
     auto elapsed = std::chrono::duration<double, std::milli>(Clock::now() - start).count();
     return {"Columnar Projection (SELECT age)", elapsed, count / (elapsed / 1000.0), static_cast<size_t>(count)};
@@ -256,6 +255,7 @@ BenchResult BenchColumnarFilter(ColumnarStore& col_store, int num_rows) {
 // ============================================================
 
 int main() {
+    std::filesystem::remove_all("bench_data");
     std::cout << "╔══════════════════════════════════════════════════════════════════════════════╗\n";
     std::cout << "║                        MiniDB Benchmark Suite                               ║\n";
     std::cout << "╚══════════════════════════════════════════════════════════════════════════════╝\n\n";
@@ -338,7 +338,6 @@ int main() {
                   << r1.time_ms / std::max(r2.time_ms, 0.001) << "x\n\n";
         all_results.push_back(r1); all_results.push_back(r2);
 
-        std::filesystem::remove_all("bench_data");
     }
 
     // Summary
@@ -350,6 +349,14 @@ int main() {
     for (const auto& r : all_results) {
         PrintBenchResult(r);
     }
+
+    std::filesystem::create_directories("benchmarks");
+    std::ofstream csv("benchmarks/results.csv");
+    csv << "benchmark,time_ms,ops_per_sec,rows\n";
+    for (const auto& r : all_results)
+        csv << '"' << r.name << "\"," << r.time_ms << ',' << r.ops_per_sec << ',' << r.row_count << '\n';
+    csv.close();
+    std::filesystem::remove_all("bench_data");
 
     return 0;
 }

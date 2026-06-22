@@ -4,7 +4,7 @@
 namespace minidb {
 
 HeapFile::HeapFile(BufferPool* buffer_pool, page_id_t first_page_id)
-    : buffer_pool_(buffer_pool), first_page_id_(first_page_id) {}
+    : buffer_pool_(buffer_pool), first_page_id_(first_page_id), insert_page_id_(first_page_id) {}
 
 HeapFile HeapFile::Create(BufferPool* buffer_pool) {
     page_id_t page_id;
@@ -86,8 +86,8 @@ void HeapFile::Scan(const ScanCallback& callback) {
 }
 
 page_id_t HeapFile::FindFreePage(uint16_t required_space) {
-    page_id_t current_page_id = first_page_id_;
-    page_id_t last_page_id = first_page_id_;
+    page_id_t current_page_id = insert_page_id_;
+    page_id_t last_page_id = insert_page_id_;
 
     while (current_page_id != INVALID_PAGE_ID) {
         Page* page = buffer_pool_->FetchPage(current_page_id);
@@ -95,6 +95,7 @@ page_id_t HeapFile::FindFreePage(uint16_t required_space) {
 
         if (page->GetFreeSpace() >= required_space) {
             buffer_pool_->UnpinPage(current_page_id, false);
+            insert_page_id_ = current_page_id;
             return current_page_id;
         }
 
@@ -117,6 +118,8 @@ page_id_t HeapFile::FindFreePage(uint16_t required_space) {
         last_page->SetNextPageId(new_page_id);
         buffer_pool_->UnpinPage(last_page_id, true);
     }
+
+    insert_page_id_ = new_page_id;
 
     return new_page_id;
 }

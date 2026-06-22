@@ -10,8 +10,13 @@ if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
 endif()
 
-set(CMAKE_CXX_FLAGS_DEBUG "-g -O0 -DDEBUG")
-set(CMAKE_CXX_FLAGS_RELEASE "-O2 -DNDEBUG")
+if(MSVC)
+    add_compile_options($<$<CONFIG:Debug>:/Od> $<$<CONFIG:Release>:/O2>)
+else()
+    add_compile_options($<$<CONFIG:Debug>:-O0;-g> $<$<CONFIG:Release>:-O2>)
+endif()
+
+find_package(Threads REQUIRED)
 
 # GoogleTest
 include(FetchContent)

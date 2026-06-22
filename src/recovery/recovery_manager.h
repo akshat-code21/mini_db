@@ -5,15 +5,17 @@
 #include "storage/heap_file.h"
 #include "index/b_plus_tree.h"
 #include "catalog/catalog.h"
+#include "index/index_manager.h"
 #include <unordered_map>
 #include <unordered_set>
 
 namespace minidb {
 
-// ARIES-inspired Recovery Manager: Analysis → Redo → Undo
+// WAL recovery manager: analysis, committed redo, and active-transaction undo.
 class RecoveryManager {
 public:
-    RecoveryManager(LogManager* log_mgr, BufferPool* buffer_pool, Catalog* catalog);
+    RecoveryManager(LogManager* log_mgr, BufferPool* buffer_pool, Catalog* catalog,
+                    IndexManager* indexes = nullptr);
 
     // Perform crash recovery on startup
     void Recover();
@@ -43,6 +45,7 @@ private:
     LogManager* log_mgr_;
     BufferPool* buffer_pool_;
     Catalog* catalog_;
+    IndexManager* indexes_;
     std::unordered_map<txn_id_t, lsn_t> txn_prev_lsn_;
 };
 

@@ -16,7 +16,7 @@ namespace minidb {
 // System catalog — registry of all tables and their metadata.
 class Catalog {
 public:
-    explicit Catalog(BufferPool* buffer_pool);
+    explicit Catalog(BufferPool* buffer_pool, const std::string& storage_path = "");
 
     // Create a new table
     Status CreateTable(const std::string& name, const Schema& schema);
@@ -39,6 +39,9 @@ public:
     // Update row count
     void IncrementRowCount(const std::string& name);
     void DecrementRowCount(const std::string& name);
+    void SetIndexRoot(const std::string& name, page_id_t root);
+    void SetRowCount(const std::string& name, uint32_t count);
+    Status Save();
 
     BufferPool* GetBufferPool() { return buffer_pool_; }
 
@@ -47,6 +50,9 @@ private:
     std::unordered_map<std::string, TableInfo> tables_;
     std::unordered_map<std::string, std::unique_ptr<HeapFile>> heap_files_;
     mutable std::mutex mutex_;
+    std::string storage_path_;
+
+    Status SaveUnlocked();
 };
 
 }  // namespace minidb
